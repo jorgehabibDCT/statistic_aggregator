@@ -4,15 +4,23 @@ from nba_api.stats.static import players, teams
 import pandas as pd
 import time
 
-from analysis.metrics import add_combo_stats, run_comparison_engine
+from analysis.metrics import (
+    add_combo_stats,
+    apply_outlier_exclusion,
+    compute_hit_rate,
+    generate_benchmark_thresholds,
+    run_comparison_engine,
+)
 from analysis.profiles import infer_player_profile
 from analysis.summaries import build_natural_language_summary
 from ui.components import (
     render_comparison_table,
+    render_hit_rate_panel,
     render_low_sample_warning,
     render_summary_cards,
     render_summary_text,
 )
+from ui.charts import render_compact_comparison_charts
 from utils.constants import (
     BASE_STATS,
     COMBO_STATS,
@@ -20,12 +28,16 @@ from utils.constants import (
     DEFAULT_VS_SAMPLE,
     EDGE_THRESHOLDS,
     LOW_SAMPLE_THRESHOLD,
+    MIN_ANALYSIS_SAMPLE,
     SAMPLE_OPTIONS,
     STABILITY_THRESHOLDS,
 )
 
 st.set_page_config(page_title="NBA Player Matchup Stats", layout="centered")
 st.title("Little Bucket Book")
+st.caption("Matchup trend analysis for player role and performance splits.")
+
+APP_VERSION = "v0.3.0"
 
 # === SETUP ===
 team_list = sorted(teams.get_teams(), key=lambda x: x['full_name'])
@@ -46,14 +58,41 @@ def get_team_id(name):
 def get_player_id(name):
     return players.find_players_by_full_name(name)[0]['id']
 
-def get_roster(team_id, season):
+
+@st.cache_data(ttl=3600)
+def fetch_roster(team_id, season):
     df = commonteamroster.CommonTeamRoster(team_id=team_id, season=season).get_data_frames()[0]
     return df['PLAYER'].tolist()
+
+
+@st.cache_data(ttl=3600)
+def fetch_player_log(player_id, season):
+    return playergamelog.PlayerGameLog(player_id=player_id, season=season).get_data_frames()[0]
+
+
+@st.cache_data(ttl=3600)
+def filter_games_vs_opponent(log_df, opp_abbr):
+    return log_df[log_df["MATCHUP"].str.contains(opp_abbr, na=False)].copy()
+
+
+@st.cache_data(ttl=900)
+def build_cached_stat_results(vs_games, overall_games, analysis_stats):
+    return run_comparison_engine(
+        vs_games,
+        overall_games,
+        list(analysis_stats),
+        EDGE_THRESHOLDS,
+        STABILITY_THRESHOLDS,
+    )
 
 # === INPUTS ===
 selected_team = st.selectbox("Select Team", team_names, index=team_names.index("Boston Celtics"))
 team_id = get_team_id(selected_team)
-roster_players = get_roster(team_id, seasons[0])
+roster_players = fetch_roster(team_id, seasons[0])
+
+if not roster_players:
+    st.error("No roster data found for the selected team/season.")
+    st.stop()
 
 player_name = st.selectbox("Select Player", sorted(roster_players), index=roster_players.index("Jayson Tatum") if "Jayson Tatum" in roster_players else 0)
 opponent_team = st.selectbox("Select Opponent Team", [t for t in team_names if t != selected_team], index=team_names.index("Miami Heat"))
@@ -70,6 +109,9 @@ else:
     overall_sample_size = st.selectbox("Overall Sample Size", SAMPLE_OPTIONS, index=SAMPLE_OPTIONS.index(DEFAULT_OVERALL_SAMPLE))
 
 show_combo_stats = st.checkbox("Include combo stats (PR, PA, RA, PRA)", value=True)
+with st.expander("Advanced Insight Controls", expanded=False):
+    exclude_high_outlier = st.checkbox("Exclude highest value in insight sample", value=False)
+    exclude_low_outlier = st.checkbox("Exclude lowest value in insight sample", value=False)
 
 # === MAIN LOGIC ===
 if st.button("Run Analysis"):
@@ -79,19 +121,26 @@ if st.button("Run Analysis"):
 
         all_games = pd.DataFrame()
         for season in seasons:
-            log = playergamelog.PlayerGameLog(player_id=player_id, season=season).get_data_frames()[0]
-            vs_team = log[log['MATCHUP'].str.contains(opp_abbr)]
+            log = fetch_player_log(player_id, season)
+            vs_team = filter_games_vs_opponent(log, opp_abbr)
             all_games = pd.concat([all_games, vs_team])
             if len(all_games) >= num_games:
                 break
             time.sleep(0.6)  # Respect rate limit
 
         all_games = all_games.head(num_games)
+        if all_games.empty:
+            st.warning("No games found vs the selected opponent for the queried seasons.")
+            st.stop()
+
         st.subheader(f"📊 {player_name}'s Last {len(all_games)} Games vs {opponent_team}")
         st.dataframe(all_games[["SEASON_ID", "GAME_DATE", "MATCHUP"] + stat_targets])
 
         # Also show overall last 10 games
-        log_recent = playergamelog.PlayerGameLog(player_id=player_id, season=seasons[0]).get_data_frames()[0]
+        log_recent = fetch_player_log(player_id, seasons[0])
+        if log_recent.empty:
+            st.warning("No recent overall games were returned for this player.")
+            st.stop()
         overall_stats = log_recent.head(num_games)[["GAME_DATE", "MATCHUP"] + stat_targets]
 
         st.subheader(f"📈 Last {num_games} Overall Games")
@@ -104,16 +153,43 @@ if st.button("Run Analysis"):
         vs_for_analysis = add_combo_stats(vs_for_analysis)
         overall_for_analysis = add_combo_stats(overall_for_analysis)
 
+        analysis_pool_stats = BASE_STATS + COMBO_STATS
+        if exclude_high_outlier or exclude_low_outlier:
+            vs_for_analysis = apply_outlier_exclusion(
+                vs_for_analysis,
+                analysis_pool_stats,
+                exclude_high=exclude_high_outlier,
+                exclude_low=exclude_low_outlier,
+            )
+            overall_for_analysis = apply_outlier_exclusion(
+                overall_for_analysis,
+                analysis_pool_stats,
+                exclude_high=exclude_high_outlier,
+                exclude_low=exclude_low_outlier,
+            )
+
+        if len(vs_for_analysis) < MIN_ANALYSIS_SAMPLE or len(overall_for_analysis) < MIN_ANALYSIS_SAMPLE:
+            st.warning(
+                "Too little data after exclusions for reliable insights. Increase sample size or disable exclusions."
+            )
+            st.stop()
+
+        if len(all_games) < vs_sample_size:
+            st.info(
+                f"Only {len(all_games)} opponent games available; requested {vs_sample_size} for insight calculations."
+            )
+
         analysis_stats = BASE_STATS + (COMBO_STATS if show_combo_stats else [])
-        stat_results = run_comparison_engine(
+        stat_results = build_cached_stat_results(
             vs_for_analysis,
             overall_for_analysis,
-            analysis_stats,
-            EDGE_THRESHOLDS,
-            STABILITY_THRESHOLDS,
+            tuple(analysis_stats),
         )
 
-        if not stat_results.empty:
+        if stat_results.empty:
+            st.warning("No analyzable stat values were found for this selection.")
+            st.stop()
+        else:
             best_row = stat_results.sort_values("delta", ascending=False).iloc[0]
             worst_row = stat_results.sort_values("delta", ascending=True).iloc[0]
             stable_row = stat_results.sort_values("volatility_score", ascending=True).iloc[0]
@@ -123,9 +199,35 @@ if st.button("Run Analysis"):
 
             render_low_sample_warning(len(vs_for_analysis), LOW_SAMPLE_THRESHOLD)
             render_summary_cards(best_row, worst_row, stable_row, volatile_row, profile, overall_confidence)
+            render_compact_comparison_charts(stat_results, stats=("PTS", "REB", "AST"))
             render_comparison_table(stat_results)
             summary_text = build_natural_language_summary(stat_results, profile, overall_confidence)
             render_summary_text(summary_text)
 
+            st.markdown("### Hit-Rate Controls")
+            hit_rate_stat = st.selectbox("Hit-Rate Stat", analysis_stats, index=analysis_stats.index("PTS") if "PTS" in analysis_stats else 0)
+            auto_thresholds = generate_benchmark_thresholds(overall_for_analysis, hit_rate_stat)
+            default_threshold = auto_thresholds[1] if len(auto_thresholds) >= 2 else (auto_thresholds[0] if auto_thresholds else 10.0)
+            hit_rate_threshold = st.number_input(
+                "Hit-Rate Threshold (>=)",
+                min_value=0.0,
+                value=float(default_threshold),
+                step=0.5,
+                format="%.1f",
+            )
+
+            if hit_rate_threshold < 0:
+                st.warning("Threshold must be non-negative.")
+                st.stop()
+
+            vs_hit_rate = compute_hit_rate(vs_for_analysis, hit_rate_stat, hit_rate_threshold)
+            overall_hit_rate = compute_hit_rate(overall_for_analysis, hit_rate_stat, hit_rate_threshold)
+            render_hit_rate_panel(hit_rate_stat, hit_rate_threshold, vs_hit_rate, overall_hit_rate, auto_thresholds)
+
+            st.caption(
+                f"Status: vs sample={len(vs_for_analysis)}, overall sample={len(overall_for_analysis)} | "
+                f"outlier exclusion={'on' if (exclude_high_outlier or exclude_low_outlier) else 'off'} | {APP_VERSION}"
+            )
+
     except Exception as e:
-        st.error(f"❌ Something went wrong: {e}")
+        st.error(f"API/network failure or unexpected error. Please retry in a moment. Details: {e}")

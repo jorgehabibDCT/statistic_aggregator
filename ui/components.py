@@ -41,3 +41,24 @@ def render_low_sample_warning(vs_sample_size, threshold):
 def render_summary_text(text):
     st.subheader("Analyst Summary")
     st.info(text)
+
+
+def render_hit_rate_panel(stat_name, threshold, vs_result, overall_result, benchmark_thresholds):
+    st.subheader("Hit-Rate Analysis")
+    st.caption("Generic threshold analysis for matchup trend context.")
+    st.markdown(f"**Selected:** `{stat_name}` at threshold `>= {threshold}`")
+
+    col1, col2 = st.columns(2)
+    col1.metric(
+        "Vs Opponent Hit Rate",
+        f"{vs_result['hit_rate_pct']}%",
+        f"{vs_result['hits']}/{vs_result['attempts']}",
+    )
+    col2.metric(
+        "Overall Hit Rate",
+        f"{overall_result['hit_rate_pct']}%",
+        f"{overall_result['hits']}/{overall_result['attempts']}",
+    )
+
+    if benchmark_thresholds:
+        st.caption(f"Auto benchmarks for {stat_name}: {', '.join(str(v) for v in benchmark_thresholds)}")

@@ -109,3 +109,56 @@ def run_comparison_engine(vs_games, overall_games, stats, edge_thresholds, stabi
         results.append(row)
 
     return pd.DataFrame(results)
+
+
+def apply_outlier_exclusion(games, stat_columns, exclude_high=False, exclude_low=False):
+    df = games.copy()
+    if df.empty or (not exclude_high and not exclude_low):
+        return df
+
+    for stat in stat_columns:
+        if stat not in df.columns:
+            continue
+        numeric_series = pd.to_numeric(df[stat], errors="coerce")
+        if numeric_series.dropna().size <= 2:
+            continue
+
+        if exclude_high:
+            max_idx = numeric_series.idxmax()
+            if max_idx in df.index:
+                df = df.drop(index=max_idx)
+        if exclude_low and not df.empty:
+            numeric_series = pd.to_numeric(df[stat], errors="coerce")
+            if numeric_series.dropna().size > 1:
+                min_idx = numeric_series.idxmin()
+                if min_idx in df.index:
+                    df = df.drop(index=min_idx)
+
+        if df.empty:
+            break
+
+    return df.reset_index(drop=True)
+
+
+def compute_hit_rate(games, stat_name, threshold):
+    series = get_stat_series(games, stat_name)
+    attempts = int(series.size)
+    if attempts == 0:
+        return {"hits": 0, "attempts": 0, "hit_rate_pct": 0.0}
+
+    hits = int((series >= threshold).sum())
+    return {
+        "hits": hits,
+        "attempts": attempts,
+        "hit_rate_pct": round((hits / attempts) * 100, 1),
+    }
+
+
+def generate_benchmark_thresholds(games, stat_name):
+    series = get_stat_series(games, stat_name)
+    if series.empty:
+        return []
+
+    percentiles = [40, 60, 75]
+    thresholds = sorted({round(float(np.percentile(series, p)), 1) for p in percentiles})
+    return thresholds
