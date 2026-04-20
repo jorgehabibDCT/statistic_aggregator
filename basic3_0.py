@@ -113,8 +113,38 @@ with st.expander("Advanced Insight Controls", expanded=False):
     exclude_high_outlier = st.checkbox("Exclude highest value in insight sample", value=False)
     exclude_low_outlier = st.checkbox("Exclude lowest value in insight sample", value=False)
 
-# === MAIN LOGIC ===
+
+def _analysis_inputs_snapshot():
+    """Snapshot of inputs that require re-running analysis when changed."""
+    return (
+        selected_team,
+        player_name,
+        opponent_team,
+        num_games,
+        use_same_sample,
+        vs_sample_size,
+        overall_sample_size,
+        show_combo_stats,
+        exclude_high_outlier,
+        exclude_low_outlier,
+    )
+
+
+# Invalidate stale analysis when user changes controls above
+if st.session_state.get("analysis_inputs_snapshot") != _analysis_inputs_snapshot():
+    st.session_state["analysis_ready"] = False
+
 if st.button("Run Analysis"):
+    st.session_state["analysis_ready"] = True
+    st.session_state["analysis_inputs_snapshot"] = _analysis_inputs_snapshot()
+    # Fresh run: show hit-rate results once without requiring form submit first
+    st.session_state["_hit_rate_results_shown"] = False
+    # New analysis: pick up benchmark default threshold for current stat (do not clobber in-form edits)
+    st.session_state.pop("hit_rate_threshold_input", None)
+
+# === MAIN LOGIC ===
+# Persist results across reruns (e.g. hit-rate widget changes); button alone would drop the block next run.
+if st.session_state.get("analysis_ready"):
     try:
         opp_abbr = get_team_abbreviation(opponent_team)
         player_id = get_player_id(player_name)
@@ -180,10 +210,12 @@ if st.button("Run Analysis"):
             )
 
         analysis_stats = BASE_STATS + (COMBO_STATS if show_combo_stats else [])
+        # Deterministic option order across reruns
+        hit_rate_options = tuple(sorted(analysis_stats))
         stat_results = build_cached_stat_results(
             vs_for_analysis,
             overall_for_analysis,
-            tuple(analysis_stats),
+            hit_rate_options,
         )
 
         if stat_results.empty:
@@ -205,24 +237,51 @@ if st.button("Run Analysis"):
             render_summary_text(summary_text)
 
             st.markdown("### Hit-Rate Controls")
-            hit_rate_stat = st.selectbox("Hit-Rate Stat", analysis_stats, index=analysis_stats.index("PTS") if "PTS" in analysis_stats else 0)
-            auto_thresholds = generate_benchmark_thresholds(overall_for_analysis, hit_rate_stat)
-            default_threshold = auto_thresholds[1] if len(auto_thresholds) >= 2 else (auto_thresholds[0] if auto_thresholds else 10.0)
-            hit_rate_threshold = st.number_input(
-                "Hit-Rate Threshold (>=)",
-                min_value=0.0,
-                value=float(default_threshold),
-                step=0.5,
-                format="%.1f",
+            # Stable keys + deterministic options; session_state survives reruns (see analysis_ready gate above).
+            if "hit_rate_stat_select" not in st.session_state:
+                st.session_state["hit_rate_stat_select"] = "PTS" if "PTS" in hit_rate_options else hit_rate_options[0]
+            elif st.session_state["hit_rate_stat_select"] not in hit_rate_options:
+                st.session_state["hit_rate_stat_select"] = "PTS" if "PTS" in hit_rate_options else hit_rate_options[0]
+                st.session_state.pop("hit_rate_threshold_input", None)
+
+            sel_for_defaults = st.session_state["hit_rate_stat_select"]
+            auto_thresholds = generate_benchmark_thresholds(overall_for_analysis, sel_for_defaults)
+            default_threshold = (
+                auto_thresholds[1]
+                if len(auto_thresholds) >= 2
+                else (auto_thresholds[0] if auto_thresholds else 10.0)
             )
+            if "hit_rate_threshold_input" not in st.session_state:
+                st.session_state["hit_rate_threshold_input"] = float(default_threshold)
 
-            if hit_rate_threshold < 0:
-                st.warning("Threshold must be non-negative.")
-                st.stop()
+            with st.form("hit_rate_form", clear_on_submit=False):
+                st.selectbox(
+                    "Hit-Rate Stat",
+                    hit_rate_options,
+                    key="hit_rate_stat_select",
+                )
+                st.number_input(
+                    "Hit-Rate Threshold (>=)",
+                    min_value=0.0,
+                    step=0.5,
+                    format="%.1f",
+                    key="hit_rate_threshold_input",
+                )
+                apply_hit_rate = st.form_submit_button("Apply hit-rate analysis")
 
-            vs_hit_rate = compute_hit_rate(vs_for_analysis, hit_rate_stat, hit_rate_threshold)
-            overall_hit_rate = compute_hit_rate(overall_for_analysis, hit_rate_stat, hit_rate_threshold)
-            render_hit_rate_panel(hit_rate_stat, hit_rate_threshold, vs_hit_rate, overall_hit_rate, auto_thresholds)
+            hit_rate_stat = st.session_state["hit_rate_stat_select"]
+            auto_thresholds = generate_benchmark_thresholds(overall_for_analysis, hit_rate_stat)
+            hit_rate_threshold = float(st.session_state["hit_rate_threshold_input"])
+
+            if apply_hit_rate or not st.session_state.get("_hit_rate_results_shown"):
+                if hit_rate_threshold < 0:
+                    st.warning("Threshold must be non-negative.")
+                    st.stop()
+
+                vs_hit_rate = compute_hit_rate(vs_for_analysis, hit_rate_stat, hit_rate_threshold)
+                overall_hit_rate = compute_hit_rate(overall_for_analysis, hit_rate_stat, hit_rate_threshold)
+                render_hit_rate_panel(hit_rate_stat, hit_rate_threshold, vs_hit_rate, overall_hit_rate, auto_thresholds)
+                st.session_state["_hit_rate_results_shown"] = True
 
             st.caption(
                 f"Status: vs sample={len(vs_for_analysis)}, overall sample={len(overall_for_analysis)} | "
