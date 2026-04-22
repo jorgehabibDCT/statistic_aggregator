@@ -18,8 +18,8 @@ def render_top_signals_panel(signal_df, top_n=12, theme_name="neon", player_cont
 
     palette = {
         "neon": {"accent": "#00f5ff", "accent2": "#ff2bd6"},
-        "retro": {"accent": "#ffd23f", "accent2": "#ff4d4d"},
-        "mono": {"accent": "#9ae6b4", "accent2": "#63b3ed"},
+        "retro": {"accent": "#00ecff", "accent2": "#ff39d4"},
+        "mono": {"accent": "#00d8ff", "accent2": "#d455ff"},
     }
     colors = palette.get(theme_name, palette["neon"])
 
@@ -37,8 +37,8 @@ def render_top_signals_panel(signal_df, top_n=12, theme_name="neon", player_cont
             <div style="
                 border: 1px solid rgba(255,255,255,{border_alpha:.2f});
                 border-left: 6px solid {colors['accent']};
-                box-shadow: 0 0 12px rgba(0,0,0,0.35), 0 0 16px rgba(255,255,255,{glow_alpha:.2f});
-                border-radius: 8px;
+                box-shadow: 0 0 8px rgba(0,0,0,0.35), 0 0 10px rgba(255,255,255,{glow_alpha:.2f});
+                border-radius: 1px;
                 padding: 10px 12px;
                 margin-bottom: 8px;
                 background: linear-gradient(90deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));

@@ -64,21 +64,21 @@ THEMES = {
     },
     "Retro": {
         "key": "retro",
-        "bg": "#1b1408",
-        "panel": "#2a1b0f",
-        "text": "#fff8d8",
-        "accent": "#ffd23f",
-        "accent2": "#ff4d4d",
-        "grid": "rgba(255,210,63,0.32)",
+        "bg": "#130f1f",
+        "panel": "#1a1430",
+        "text": "#efe9ff",
+        "accent": "#00ecff",
+        "accent2": "#ff39d4",
+        "grid": "rgba(0,236,255,0.34)",
     },
     "Mono": {
         "key": "mono",
-        "bg": "#0f1216",
-        "panel": "#171b20",
-        "text": "#d7e0ea",
-        "accent": "#9ae6b4",
-        "accent2": "#63b3ed",
-        "grid": "rgba(120,140,160,0.30)",
+        "bg": "#0f1115",
+        "panel": "#151922",
+        "text": "#d9deea",
+        "accent": "#00d8ff",
+        "accent2": "#d455ff",
+        "grid": "rgba(0,216,255,0.28)",
     },
 }
 
@@ -98,21 +98,25 @@ def _apply_theme_css(theme):
         .stApp {{
             background: radial-gradient(circle at top left, rgba(255,255,255,0.03), transparent 40%), var(--app-bg);
             color: var(--text-main);
+            font-family: "IBM Plex Mono", "Lucida Console", "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }}
+        .stApp * {{
+            font-family: "IBM Plex Mono", "Lucida Console", "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
         }}
         div[data-testid="stVerticalBlock"] > div:has(> div.dj-panel) {{
             margin-bottom: 1rem;
         }}
         .dj-panel {{
             background: linear-gradient(160deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
-            border: 1px solid rgba(255,255,255,0.16);
-            border-radius: 10px;
+            border: 1px solid color-mix(in srgb, var(--accent-1) 45%, rgba(255,255,255,0.16));
+            border-radius: 2px;
             padding: 0.75rem 0.85rem;
-            box-shadow: 0 0 10px rgba(0,0,0,0.35), 0 0 24px color-mix(in srgb, var(--accent-1) 20%, transparent);
+            box-shadow: 0 0 8px rgba(0,0,0,0.35), 0 0 14px color-mix(in srgb, var(--accent-1) 22%, transparent);
         }}
         .mixer-channel {{
             background: rgba(0,0,0,0.22);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 8px;
+            border: 1px solid color-mix(in srgb, var(--accent-2) 30%, rgba(255,255,255,0.08));
+            border-radius: 1px;
             padding: 0.35rem 0.45rem 0.5rem 0.45rem;
             min-height: 140px;
         }}
@@ -124,19 +128,36 @@ def _apply_theme_css(theme):
             opacity: 0.92;
         }}
         .stButton button {{
-            border: 1px solid rgba(255,255,255,0.2) !important;
+            border: 1px solid color-mix(in srgb, var(--accent-1) 50%, rgba(255,255,255,0.2)) !important;
             background: linear-gradient(90deg, color-mix(in srgb, var(--accent-1) 35%, transparent), color-mix(in srgb, var(--accent-2) 35%, transparent)) !important;
             color: var(--text-main) !important;
             font-weight: 700 !important;
+            border-radius: 1px !important;
         }}
         .stButton button:hover {{
             filter: brightness(1.12);
+        }}
+        .stSelectbox [data-baseweb="select"] > div,
+        .stNumberInput [data-baseweb="input"] > div,
+        .stTextInput [data-baseweb="input"] > div,
+        .stTextArea textarea {{
+            border-radius: 1px !important;
+            border: 1px solid color-mix(in srgb, var(--accent-1) 40%, rgba(255,255,255,0.22)) !important;
+            box-shadow: none !important;
+            background: color-mix(in srgb, var(--panel-bg) 92%, black 8%) !important;
+        }}
+        .stSelectbox [data-baseweb="select"] > div:focus-within,
+        .stNumberInput [data-baseweb="input"] > div:focus-within,
+        .stTextInput [data-baseweb="input"] > div:focus-within {{
+            border-color: var(--accent-2) !important;
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-2) 60%, transparent) !important;
         }}
         [data-testid="stDataFrame"] * {{
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
         }}
         [data-testid="stDataFrame"] [role="table"] {{
             border: 1px solid var(--grid-color) !important;
+            border-radius: 0 !important;
         }}
         [data-testid="stDataFrame"] [role="columnheader"],
         [data-testid="stDataFrame"] [role="gridcell"] {{
