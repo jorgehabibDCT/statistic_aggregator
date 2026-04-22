@@ -46,6 +46,8 @@ st.title("The Matchup Method")
 st.caption("Matchup trend analysis for player role and performance splits.")
 
 APP_VERSION = "v0.3.0"
+FETCH_RETRIES = 3
+FETCH_BACKOFF_SECONDS = 0.8
 
 # === SETUP ===
 team_list = sorted(teams.get_teams(), key=lambda x: x['full_name'])
@@ -67,19 +69,49 @@ def get_player_id(name):
     return players.find_players_by_full_name(name)[0]['id']
 
 
+def _call_with_retries(fetch_fn, context_label, retries=FETCH_RETRIES, backoff_seconds=FETCH_BACKOFF_SECONDS):
+    last_error = None
+    for attempt in range(retries):
+        try:
+            return fetch_fn(), None
+        except Exception as exc:
+            last_error = exc
+            if attempt < retries - 1:
+                time.sleep(backoff_seconds * (attempt + 1))
+    return None, f"{context_label} failed after {retries} attempts: {last_error}"
+
+
 @st.cache_data(ttl=3600)
 def fetch_roster(team_id, season):
-    df = commonteamroster.CommonTeamRoster(team_id=team_id, season=season).get_data_frames()[0]
-    return df['PLAYER'].tolist()
+    def _request():
+        df = commonteamroster.CommonTeamRoster(team_id=team_id, season=season).get_data_frames()[0]
+        return df["PLAYER"].tolist()
+
+    players_list, error_message = _call_with_retries(
+        _request,
+        context_label=f"Roster fetch for team_id={team_id}, season={season}",
+    )
+    if error_message:
+        return [], error_message
+    return players_list or [], None
 
 
 @st.cache_data(ttl=3600)
 def fetch_player_log(player_id, season, season_type):
-    return playergamelog.PlayerGameLog(
-        player_id=player_id,
-        season=season,
-        season_type_all_star=season_type,
-    ).get_data_frames()[0]
+    def _request():
+        return playergamelog.PlayerGameLog(
+            player_id=player_id,
+            season=season,
+            season_type_all_star=season_type,
+        ).get_data_frames()[0]
+
+    log_df, _ = _call_with_retries(
+        _request,
+        context_label=f"Player log fetch for player_id={player_id}, season={season}, source={season_type}",
+    )
+    if log_df is None:
+        return pd.DataFrame()
+    return log_df
 
 
 @st.cache_data(ttl=3600)
@@ -281,10 +313,14 @@ def _run_team_analysis_for_roster(
 # === INPUTS ===
 selected_team = st.selectbox("Select Team", team_names, index=team_names.index("Boston Celtics"))
 team_id = get_team_id(selected_team)
-roster_players = fetch_roster(team_id, seasons[0])
+roster_players, roster_fetch_error = fetch_roster(team_id, seasons[0])
+
+if roster_fetch_error:
+    st.warning("Live NBA roster data is temporarily unavailable. Please retry in a moment.")
+    st.caption(roster_fetch_error)
 
 if not roster_players:
-    st.error("No roster data found for the selected team/season.")
+    st.error("No roster data found for the selected team/season right now.")
     st.stop()
 
 sorted_roster_players = sorted(roster_players)
@@ -373,7 +409,10 @@ if st.session_state.get("team_analysis_ready"):
 
 if st.button("Load Matchup"):
     opponent_team_id = get_team_id(opponent_team)
-    opponent_roster = fetch_roster(opponent_team_id, seasons[0])
+    opponent_roster, opponent_roster_error = fetch_roster(opponent_team_id, seasons[0])
+    if opponent_roster_error:
+        st.warning("Opponent roster fetch is temporarily unavailable. Please retry shortly.")
+        st.caption(opponent_roster_error)
     if not opponent_roster:
         st.warning("No roster data found for opponent team.")
     else:

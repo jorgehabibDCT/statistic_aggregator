@@ -24,7 +24,7 @@ def render_top_signals_panel(signal_df, top_n=12):
                 "profile",
             ]
         ],
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -53,5 +53,5 @@ def render_team_summary_table(summary_df):
                 "opponent_sample_adequate",
             ]
         ],
-        use_container_width=True,
+        width="stretch",
     )

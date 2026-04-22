@@ -34,7 +34,7 @@ def render_comparison_table(stat_results):
         "confidence",
         "vs_sample_size",
     ]
-    st.dataframe(display_df[display_cols], use_container_width=True)
+    st.dataframe(display_df[display_cols], width="stretch")
 
 
 def render_low_sample_warning(vs_sample_size, threshold):
