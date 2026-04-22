@@ -1,6 +1,5 @@
 import streamlit as st
-
-from analysis.metrics import compute_hit_rate
+from time import perf_counter
 from ui.components import format_stat_label
 
 
@@ -81,12 +80,46 @@ def render_top_signals_panel(signal_df, top_n=12, theme_name="neon", player_cont
 
             if submitted:
                 threshold_value = float(st.session_state[threshold_key])
-                vs_result = compute_hit_rate(context["vs_for_analysis"], row["stat"], threshold_value)
-                overall_result = compute_hit_rate(context["overall_for_analysis"], row["stat"], threshold_value)
+                cache_key = f"{result_key}_{threshold_value:.3f}"
+                hit_rate_cache = st.session_state.setdefault("inline_hit_rate_cache", {})
+                started = perf_counter()
+                if cache_key in hit_rate_cache:
+                    cached_result = hit_rate_cache[cache_key]
+                    vs_result = cached_result["vs"]
+                    overall_result = cached_result["overall"]
+                    elapsed_ms = cached_result["elapsed_ms"]
+                else:
+                    stat_key = row["stat"]
+                    vs_values = context.get("vs_values_by_stat", {}).get(stat_key, [])
+                    overall_values = context.get("overall_values_by_stat", {}).get(stat_key, [])
+
+                    vs_attempts = len(vs_values)
+                    vs_hits = sum(1 for val in vs_values if val >= threshold_value)
+                    overall_attempts = len(overall_values)
+                    overall_hits = sum(1 for val in overall_values if val >= threshold_value)
+
+                    vs_result = {
+                        "hits": vs_hits,
+                        "attempts": vs_attempts,
+                        "hit_rate_pct": round((vs_hits / vs_attempts) * 100, 1) if vs_attempts else 0.0,
+                    }
+                    overall_result = {
+                        "hits": overall_hits,
+                        "attempts": overall_attempts,
+                        "hit_rate_pct": round((overall_hits / overall_attempts) * 100, 1) if overall_attempts else 0.0,
+                    }
+                    elapsed_ms = round((perf_counter() - started) * 1000, 2)
+                    hit_rate_cache[cache_key] = {
+                        "vs": vs_result,
+                        "overall": overall_result,
+                        "elapsed_ms": elapsed_ms,
+                    }
+
                 st.session_state[result_key] = {
                     "threshold": threshold_value,
                     "vs": vs_result,
                     "overall": overall_result,
+                    "elapsed_ms": elapsed_ms,
                 }
 
             result = st.session_state.get(result_key)
@@ -94,7 +127,8 @@ def render_top_signals_panel(signal_df, top_n=12, theme_name="neon", player_cont
                 st.caption(
                     f"Line {result['threshold']:.1f} | "
                     f"vs opp: {result['vs']['hits']}/{result['vs']['attempts']} ({result['vs']['hit_rate_pct']}%) | "
-                    f"overall: {result['overall']['hits']}/{result['overall']['attempts']} ({result['overall']['hit_rate_pct']}%)"
+                    f"overall: {result['overall']['hits']}/{result['overall']['attempts']} ({result['overall']['hit_rate_pct']}%) | "
+                    f"compute: {result['elapsed_ms']} ms"
                 )
         else:
             st.caption("No sample context available for hit-rate check.")

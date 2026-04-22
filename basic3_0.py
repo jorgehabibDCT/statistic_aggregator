@@ -50,6 +50,7 @@ FETCH_RETRIES = 3
 FETCH_BACKOFF_SECONDS = 0.8
 SHOW_TEAM_SUMMARY = False
 SHOW_PLAYER_DETAIL = False
+AUTO_RERUN_TEAM_SCAN = False
 
 
 THEMES = {
@@ -475,9 +476,20 @@ def _run_team_analysis_for_roster(
         if not player_analysis:
             continue
 
+        vs_df = player_analysis["vs_for_analysis"]
+        overall_df = player_analysis["overall_for_analysis"]
+        tracked_stats = BASE_STATS + COMBO_STATS
         player_sample_context_local[roster_player] = {
-            "vs_for_analysis": player_analysis["vs_for_analysis"],
-            "overall_for_analysis": player_analysis["overall_for_analysis"],
+            "vs_values_by_stat": {
+                stat: pd.to_numeric(vs_df[stat], errors="coerce").dropna().tolist()
+                for stat in tracked_stats
+                if stat in vs_df.columns
+            },
+            "overall_values_by_stat": {
+                stat: pd.to_numeric(overall_df[stat], errors="coerce").dropna().tolist()
+                for stat in tracked_stats
+                if stat in overall_df.columns
+            },
         }
 
         summary_row = build_player_summary_row(
@@ -626,7 +638,7 @@ if st.session_state.get("team_analysis_inputs_snapshot") != _team_inputs_snapsho
     st.session_state["team_analysis_ready"] = False
     st.session_state["matchup_analysis_ready"] = False
 
-if st.session_state.get("team_analysis_ready"):
+if AUTO_RERUN_TEAM_SCAN and st.session_state.get("team_analysis_ready"):
     opp_abbr_for_team = get_team_abbreviation(opponent_team)
     with st.spinner("Running team signal scan..."):
         team_summary_df, signal_df, player_context_map = _run_team_analysis_for_roster(
@@ -724,6 +736,10 @@ if st.button("Load Matchup"):
         st.session_state["matchup_team_b_signal_df"] = team_b_signal_df
         st.session_state["matchup_team_a_context_map"] = team_a_context_map
         st.session_state["matchup_team_b_context_map"] = team_b_context_map
+        # Keep selected-team single-surface data aligned with matchup results.
+        st.session_state["team_summary_df"] = team_a_summary_df
+        st.session_state["team_signal_df"] = team_a_signal_df
+        st.session_state["team_player_context_map"] = team_a_context_map
         combined_options, combined_mapping = _build_matchup_player_options(
             sorted_roster_players,
             sorted(opponent_roster),
