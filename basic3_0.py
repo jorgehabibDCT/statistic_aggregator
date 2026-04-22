@@ -36,6 +36,7 @@ from utils.constants import (
     EDGE_THRESHOLDS,
     LOW_SAMPLE_THRESHOLD,
     MIN_ANALYSIS_SAMPLE,
+    OVERALL_SAMPLE_OPTIONS,
     SAMPLE_OPTIONS,
     STABILITY_THRESHOLDS,
 )
@@ -73,8 +74,52 @@ def fetch_roster(team_id, season):
 
 
 @st.cache_data(ttl=3600)
-def fetch_player_log(player_id, season):
-    return playergamelog.PlayerGameLog(player_id=player_id, season=season).get_data_frames()[0]
+def fetch_player_log(player_id, season, season_type):
+    return playergamelog.PlayerGameLog(
+        player_id=player_id,
+        season=season,
+        season_type_all_star=season_type,
+    ).get_data_frames()[0]
+
+
+@st.cache_data(ttl=3600)
+def fetch_player_log_by_source(player_id, season, game_source, exclude_last_regular_games):
+    def _trim_regular_tail(df, trim_count):
+        if df.empty or trim_count <= 0:
+            return df
+        trimmed = df.copy()
+        if "GAME_DATE" in trimmed.columns:
+            trimmed["GAME_DATE_SORT"] = pd.to_datetime(trimmed["GAME_DATE"], errors="coerce")
+            trimmed = trimmed.sort_values("GAME_DATE_SORT", ascending=False).drop(columns=["GAME_DATE_SORT"])
+        return trimmed.iloc[trim_count:].reset_index(drop=True)
+
+    if game_source == "Regular Season":
+        regular_df = fetch_player_log(player_id, season, "Regular Season")
+        df = _trim_regular_tail(regular_df, exclude_last_regular_games)
+    elif game_source == "Playoffs":
+        df = fetch_player_log(player_id, season, "Playoffs")
+    else:
+        regular_df = fetch_player_log(player_id, season, "Regular Season")
+        playoff_df = fetch_player_log(player_id, season, "Playoffs")
+        regular_df = _trim_regular_tail(regular_df, exclude_last_regular_games)
+        if regular_df.empty and playoff_df.empty:
+            return pd.DataFrame()
+        if regular_df.empty:
+            df = playoff_df.copy()
+        elif playoff_df.empty:
+            df = regular_df.copy()
+        else:
+            shared_cols = sorted(set(regular_df.columns).intersection(set(playoff_df.columns)))
+            df = pd.concat([regular_df[shared_cols], playoff_df[shared_cols]], ignore_index=True)
+
+    if df.empty:
+        return df
+
+    if "GAME_DATE" in df.columns:
+        df = df.copy()
+        df["GAME_DATE_SORT"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
+        df = df.sort_values("GAME_DATE_SORT", ascending=False).drop(columns=["GAME_DATE_SORT"])
+    return df.reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600)
@@ -99,6 +144,8 @@ def _run_single_player_analysis(
     num_games_value,
     vs_sample_value,
     overall_sample_value,
+    game_source,
+    exclude_last_regular_games,
     include_combo,
     exclude_high,
     exclude_low,
@@ -106,7 +153,7 @@ def _run_single_player_analysis(
     player_id = get_player_id(player_name_to_analyze)
     all_games_local = pd.DataFrame()
     for season in seasons:
-        log = fetch_player_log(player_id, season)
+        log = fetch_player_log_by_source(player_id, season, game_source, exclude_last_regular_games)
         vs_team = filter_games_vs_opponent(log, opponent_abbr)
         all_games_local = pd.concat([all_games_local, vs_team])
         if len(all_games_local) >= num_games_value:
@@ -117,7 +164,7 @@ def _run_single_player_analysis(
     if all_games_local.empty:
         return None
 
-    log_recent = fetch_player_log(player_id, seasons[0])
+    log_recent = fetch_player_log_by_source(player_id, seasons[0], game_source, exclude_last_regular_games)
     if log_recent.empty:
         return None
 
@@ -161,6 +208,76 @@ def _run_single_player_analysis(
         "profile": profile_local,
     }
 
+
+def _run_team_analysis_for_roster(
+    roster_player_names,
+    opponent_abbr_value,
+    num_games_value,
+    vs_sample_value,
+    overall_sample_value,
+    game_source,
+    exclude_last_regular_games,
+    include_combo,
+    exclude_high,
+    exclude_low,
+    min_confidence,
+    min_delta,
+    min_sample,
+    include_combo_signals,
+):
+    team_summary_rows_local = []
+    signal_rows_local = []
+
+    for roster_player in roster_player_names:
+        player_analysis = _run_single_player_analysis(
+            roster_player,
+            opponent_abbr_value,
+            num_games_value,
+            vs_sample_value,
+            overall_sample_value,
+            game_source,
+            exclude_last_regular_games,
+            include_combo,
+            exclude_high,
+            exclude_low,
+        )
+        if not player_analysis:
+            continue
+
+        summary_row = build_player_summary_row(
+            roster_player,
+            player_analysis["stat_results"],
+            player_analysis["profile"],
+            LOW_SAMPLE_THRESHOLD,
+        )
+        if summary_row:
+            team_summary_rows_local.append(summary_row)
+
+        signal_rows_local.extend(
+            build_signal_rows(
+                roster_player,
+                player_analysis["stat_results"],
+                player_analysis["profile"],
+                LOW_SAMPLE_THRESHOLD,
+            )
+        )
+
+    team_summary_df_local = pd.DataFrame(team_summary_rows_local)
+    signal_df_local = finalize_signal_board(signal_rows_local)
+
+    if not include_combo_signals and not signal_df_local.empty:
+        signal_df_local = signal_df_local[signal_df_local["stat"].isin(BASE_STATS)]
+
+    if not signal_df_local.empty:
+        signal_df_local = signal_df_local[
+            (signal_df_local["confidence"] >= min_confidence)
+            & (signal_df_local["delta"] >= min_delta)
+            & (signal_df_local["vs_sample_size"] >= min_sample)
+            & (signal_df_local["opponent_sample_adequate"])
+        ].reset_index(drop=True)
+
+    return team_summary_df_local, signal_df_local
+
 # === INPUTS ===
 selected_team = st.selectbox("Select Team", team_names, index=team_names.index("Boston Celtics"))
 team_id = get_team_id(selected_team)
@@ -178,17 +295,23 @@ elif st.session_state["player_select"] not in sorted_roster_players:
 
 player_name = st.session_state["player_select"]
 opponent_team = st.selectbox("Select Opponent Team", [t for t in team_names if t != selected_team], index=team_names.index("Miami Heat"))
+game_source = st.selectbox("Game Source", ["Regular Season", "Playoffs", "Combined"], index=0)
+exclude_last_regular_games = st.selectbox("Exclude Last X Regular-Season Games", [0, 3, 5, 7, 10], index=0)
+if game_source == "Playoffs":
+    st.caption("Exclude Last X Regular-Season Games applies only to Regular Season and Combined sources.")
 num_games = st.slider("Number of Games", 1, 20, 10)
 
 st.markdown("### Insight Controls")
-use_same_sample = st.checkbox("Use same sample size for both splits", value=True)
-if use_same_sample:
-    shared_sample = st.selectbox("Sample Size", SAMPLE_OPTIONS, index=SAMPLE_OPTIONS.index(DEFAULT_VS_SAMPLE))
-    vs_sample_size = shared_sample
-    overall_sample_size = shared_sample
-else:
-    vs_sample_size = st.selectbox("Vs Opponent Sample Size", SAMPLE_OPTIONS, index=SAMPLE_OPTIONS.index(DEFAULT_VS_SAMPLE))
-    overall_sample_size = st.selectbox("Overall Sample Size", SAMPLE_OPTIONS, index=SAMPLE_OPTIONS.index(DEFAULT_OVERALL_SAMPLE))
+vs_sample_size = st.selectbox(
+    "Vs Opponent Sample Size",
+    SAMPLE_OPTIONS,
+    index=SAMPLE_OPTIONS.index(DEFAULT_VS_SAMPLE),
+)
+overall_sample_size = st.selectbox(
+    "Overall Sample Size",
+    OVERALL_SAMPLE_OPTIONS,
+    index=OVERALL_SAMPLE_OPTIONS.index(DEFAULT_OVERALL_SAMPLE),
+)
 
 show_combo_stats = st.checkbox("Include combo stats (PR, PA, RA, PRA)", value=True)
 with st.expander("Advanced Insight Controls", expanded=False):
@@ -200,6 +323,8 @@ def _team_inputs_snapshot():
     return (
         selected_team,
         opponent_team,
+        game_source,
+        exclude_last_regular_games,
         num_games,
         vs_sample_size,
         overall_sample_size,
@@ -217,6 +342,7 @@ signal_include_combo = st.checkbox("Signal Board: Include combo stats", value=Tr
 
 if st.session_state.get("team_analysis_inputs_snapshot") != _team_inputs_snapshot():
     st.session_state["team_analysis_ready"] = False
+    st.session_state["matchup_analysis_ready"] = False
 
 if st.button("Run Team Analysis"):
     st.session_state["team_analysis_ready"] = True
@@ -224,62 +350,90 @@ if st.button("Run Team Analysis"):
 
 if st.session_state.get("team_analysis_ready"):
     opp_abbr_for_team = get_team_abbreviation(opponent_team)
-    team_summary_rows = []
-    signal_rows = []
-
     with st.spinner("Running team signal scan..."):
-        for roster_player in sorted_roster_players:
-            player_analysis = _run_single_player_analysis(
-                roster_player,
-                opp_abbr_for_team,
-                num_games,
-                vs_sample_size,
-                overall_sample_size,
-                show_combo_stats,
-                exclude_high_outlier,
-                exclude_low_outlier,
-            )
-            if not player_analysis:
-                continue
-
-            summary_row = build_player_summary_row(
-                roster_player,
-                player_analysis["stat_results"],
-                player_analysis["profile"],
-                LOW_SAMPLE_THRESHOLD,
-            )
-            if summary_row:
-                team_summary_rows.append(summary_row)
-
-            signal_rows.extend(
-                build_signal_rows(
-                    roster_player,
-                    player_analysis["stat_results"],
-                    player_analysis["profile"],
-                    LOW_SAMPLE_THRESHOLD,
-                )
-            )
-
-    team_summary_df = pd.DataFrame(team_summary_rows)
-    signal_df = finalize_signal_board(signal_rows)
-
-    if not signal_include_combo and not signal_df.empty:
-        signal_df = signal_df[signal_df["stat"].isin(BASE_STATS)]
-
-    if not signal_df.empty:
-        signal_df = signal_df[
-            (signal_df["confidence"] >= min_signal_confidence)
-            & (signal_df["delta"] >= min_signal_delta)
-            & (signal_df["vs_sample_size"] >= min_signal_sample)
-            & (signal_df["opponent_sample_adequate"])
-        ].reset_index(drop=True)
+        team_summary_df, signal_df = _run_team_analysis_for_roster(
+            sorted_roster_players,
+            opp_abbr_for_team,
+            num_games,
+            vs_sample_size,
+            overall_sample_size,
+            game_source,
+            exclude_last_regular_games,
+            show_combo_stats,
+            exclude_high_outlier,
+            exclude_low_outlier,
+            min_signal_confidence,
+            min_signal_delta,
+            min_signal_sample,
+            signal_include_combo,
+        )
 
     st.session_state["team_summary_df"] = team_summary_df
     st.session_state["team_signal_df"] = signal_df
 
+if st.button("Load Matchup"):
+    opponent_team_id = get_team_id(opponent_team)
+    opponent_roster = fetch_roster(opponent_team_id, seasons[0])
+    if not opponent_roster:
+        st.warning("No roster data found for opponent team.")
+    else:
+        with st.spinner("Loading matchup for both teams..."):
+            team_a_summary_df, team_a_signal_df = _run_team_analysis_for_roster(
+                sorted_roster_players,
+                get_team_abbreviation(opponent_team),
+                num_games,
+                vs_sample_size,
+                overall_sample_size,
+                game_source,
+                exclude_last_regular_games,
+                show_combo_stats,
+                exclude_high_outlier,
+                exclude_low_outlier,
+                min_signal_confidence,
+                min_signal_delta,
+                min_signal_sample,
+                signal_include_combo,
+            )
+            team_b_summary_df, team_b_signal_df = _run_team_analysis_for_roster(
+                sorted(opponent_roster),
+                get_team_abbreviation(selected_team),
+                num_games,
+                vs_sample_size,
+                overall_sample_size,
+                game_source,
+                exclude_last_regular_games,
+                show_combo_stats,
+                exclude_high_outlier,
+                exclude_low_outlier,
+                min_signal_confidence,
+                min_signal_delta,
+                min_signal_sample,
+                signal_include_combo,
+            )
+
+        st.session_state["team_analysis_ready"] = True
+        st.session_state["team_analysis_inputs_snapshot"] = _team_inputs_snapshot()
+        st.session_state["matchup_analysis_ready"] = True
+        st.session_state["matchup_team_a_name"] = selected_team
+        st.session_state["matchup_team_b_name"] = opponent_team
+        st.session_state["matchup_team_a_summary_df"] = team_a_summary_df
+        st.session_state["matchup_team_a_signal_df"] = team_a_signal_df
+        st.session_state["matchup_team_b_summary_df"] = team_b_summary_df
+        st.session_state["matchup_team_b_signal_df"] = team_b_signal_df
+
 if "team_signal_df" in st.session_state and "team_summary_df" in st.session_state:
     render_top_signals_panel(st.session_state["team_signal_df"])
     render_team_summary_table(st.session_state["team_summary_df"])
+
+if st.session_state.get("matchup_analysis_ready"):
+    st.markdown("### Matchup View")
+    st.markdown(f"#### {st.session_state.get('matchup_team_a_name', selected_team)}")
+    render_top_signals_panel(st.session_state.get("matchup_team_a_signal_df", pd.DataFrame()))
+    render_team_summary_table(st.session_state.get("matchup_team_a_summary_df", pd.DataFrame()))
+
+    st.markdown(f"#### {st.session_state.get('matchup_team_b_name', opponent_team)}")
+    render_top_signals_panel(st.session_state.get("matchup_team_b_signal_df", pd.DataFrame()))
+    render_team_summary_table(st.session_state.get("matchup_team_b_summary_df", pd.DataFrame()))
 
 if st.session_state.get("team_analysis_ready"):
     player_name = st.selectbox("Select Player for Detail View", sorted_roster_players, key="player_select")
@@ -294,8 +448,9 @@ def _analysis_inputs_snapshot():
         selected_team,
         player_name,
         opponent_team,
+        game_source,
+        exclude_last_regular_games,
         num_games,
-        use_same_sample,
         vs_sample_size,
         overall_sample_size,
         show_combo_stats,
@@ -328,6 +483,8 @@ if st.session_state.get("analysis_ready"):
             num_games,
             vs_sample_size,
             overall_sample_size,
+            game_source,
+            exclude_last_regular_games,
             show_combo_stats,
             exclude_high_outlier,
             exclude_low_outlier,
