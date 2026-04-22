@@ -51,6 +51,105 @@ FETCH_BACKOFF_SECONDS = 0.8
 SHOW_TEAM_SUMMARY = False
 SHOW_PLAYER_DETAIL = False
 
+
+THEMES = {
+    "Neon": {
+        "key": "neon",
+        "bg": "#0a0a14",
+        "panel": "#111126",
+        "text": "#e8f7ff",
+        "accent": "#00f5ff",
+        "accent2": "#ff2bd6",
+        "grid": "rgba(0,245,255,0.28)",
+    },
+    "Retro": {
+        "key": "retro",
+        "bg": "#1b1408",
+        "panel": "#2a1b0f",
+        "text": "#fff8d8",
+        "accent": "#ffd23f",
+        "accent2": "#ff4d4d",
+        "grid": "rgba(255,210,63,0.32)",
+    },
+    "Mono": {
+        "key": "mono",
+        "bg": "#0f1216",
+        "panel": "#171b20",
+        "text": "#d7e0ea",
+        "accent": "#9ae6b4",
+        "accent2": "#63b3ed",
+        "grid": "rgba(120,140,160,0.30)",
+    },
+}
+
+
+def _apply_theme_css(theme):
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --app-bg: {theme['bg']};
+            --panel-bg: {theme['panel']};
+            --text-main: {theme['text']};
+            --accent-1: {theme['accent']};
+            --accent-2: {theme['accent2']};
+            --grid-color: {theme['grid']};
+        }}
+        .stApp {{
+            background: radial-gradient(circle at top left, rgba(255,255,255,0.03), transparent 40%), var(--app-bg);
+            color: var(--text-main);
+        }}
+        div[data-testid="stVerticalBlock"] > div:has(> div.dj-panel) {{
+            margin-bottom: 1rem;
+        }}
+        .dj-panel {{
+            background: linear-gradient(160deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+            border: 1px solid rgba(255,255,255,0.16);
+            border-radius: 10px;
+            padding: 0.75rem 0.85rem;
+            box-shadow: 0 0 10px rgba(0,0,0,0.35), 0 0 24px color-mix(in srgb, var(--accent-1) 20%, transparent);
+        }}
+        .mixer-channel {{
+            background: rgba(0,0,0,0.22);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            padding: 0.35rem 0.45rem 0.5rem 0.45rem;
+            min-height: 140px;
+        }}
+        .mixer-label {{
+            text-align: center;
+            font-size: 0.78rem;
+            margin-top: 0.2rem;
+            letter-spacing: 0.04em;
+            opacity: 0.92;
+        }}
+        .stButton button {{
+            border: 1px solid rgba(255,255,255,0.2) !important;
+            background: linear-gradient(90deg, color-mix(in srgb, var(--accent-1) 35%, transparent), color-mix(in srgb, var(--accent-2) 35%, transparent)) !important;
+            color: var(--text-main) !important;
+            font-weight: 700 !important;
+        }}
+        .stButton button:hover {{
+            filter: brightness(1.12);
+        }}
+        [data-testid="stDataFrame"] * {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+        }}
+        [data-testid="stDataFrame"] [role="table"] {{
+            border: 1px solid var(--grid-color) !important;
+        }}
+        [data-testid="stDataFrame"] [role="columnheader"],
+        [data-testid="stDataFrame"] [role="gridcell"] {{
+            border-right: 1px solid var(--grid-color) !important;
+            border-bottom: 1px solid var(--grid-color) !important;
+            color: color-mix(in srgb, var(--text-main) 88%, #c6ffd8) !important;
+            background-color: color-mix(in srgb, var(--panel-bg) 88%, black 12%) !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # === SETUP ===
 team_list = sorted(teams.get_teams(), key=lambda x: x['full_name'])
 team_names = [team['full_name'] for team in team_list]
@@ -395,66 +494,11 @@ def _run_team_analysis_for_roster(
     return team_summary_df_local, signal_df_local, player_sample_context_local
 
 
-def _render_quick_signal_hit_rate(signal_df, player_context_map, section_key):
-    if signal_df.empty or not player_context_map:
-        return
-
-    with st.expander("Quick Hit-Rate Check", expanded=False):
-        top_for_check = signal_df.head(12).copy()
-        if top_for_check.empty:
-            st.caption("No top signals available for quick hit-rate checks.")
-            return
-
-        option_labels = []
-        option_map = {}
-        for idx, row in top_for_check.iterrows():
-            label = f"{row['player']} — {format_stat_label(row['stat'])} ({row['delta']:+.1f})"
-            option_labels.append(label)
-            option_map[label] = {
-                "player": row["player"],
-                "stat": row["stat"],
-                "row_id": f"{section_key}_{idx}",
-            }
-
-        selected_signal_label = st.selectbox(
-            "Top Signal",
-            option_labels,
-            key=f"{section_key}_quick_signal_select",
-        )
-        selected_signal = option_map[selected_signal_label]
-
-        threshold = st.number_input(
-            "Line / Threshold (>=)",
-            min_value=0.0,
-            step=0.5,
-            value=10.0,
-            key=f"{section_key}_quick_signal_threshold",
-            format="%.1f",
-        )
-
-        player_name_for_check = selected_signal["player"]
-        stat_for_check = selected_signal["stat"]
-        context = player_context_map.get(player_name_for_check)
-        if not context:
-            st.caption("No sample context available for this signal.")
-            return
-
-        vs_result = compute_hit_rate(context["vs_for_analysis"], stat_for_check, threshold)
-        overall_result = compute_hit_rate(context["overall_for_analysis"], stat_for_check, threshold)
-
-        col1, col2 = st.columns(2)
-        col1.metric(
-            "Vs Opponent",
-            f"{vs_result['hit_rate_pct']}%",
-            f"{vs_result['hits']}/{vs_result['attempts']}",
-        )
-        col2.metric(
-            "Overall",
-            f"{overall_result['hit_rate_pct']}%",
-            f"{overall_result['hits']}/{overall_result['attempts']}",
-        )
-
 # === INPUTS ===
+theme_choice = st.selectbox("Visual Theme", list(THEMES.keys()), index=0)
+active_theme = THEMES[theme_choice]
+_apply_theme_css(active_theme)
+
 selected_team = st.selectbox("Select Team", team_names, index=team_names.index("Boston Celtics"))
 team_id = get_team_id(selected_team)
 roster_players, roster_fetch_error = fetch_roster(team_id, seasons[0])
@@ -516,9 +560,45 @@ def _team_inputs_snapshot():
 
 
 st.markdown("## Team Analysis + Top Signals")
-min_signal_confidence = st.slider("Signal Filter: Min Confidence", 0, 100, 55, key="team_min_conf")
-min_signal_delta = st.number_input("Signal Filter: Min Delta", min_value=0.0, value=1.0, step=0.5, key="team_min_delta")
-min_signal_sample = st.slider("Signal Filter: Min Opponent Sample", 1, 10, 5, key="team_min_sample")
+st.markdown('<div class="dj-panel"><div style="font-weight:800;letter-spacing:0.08em;margin-bottom:0.45rem;">Signal Mixer</div></div>', unsafe_allow_html=True)
+mixer_cols = st.columns(3)
+with mixer_cols[0]:
+    st.markdown('<div class="mixer-channel">', unsafe_allow_html=True)
+    min_signal_confidence = st.slider(
+        "Min Confidence",
+        0,
+        100,
+        55,
+        key="team_min_conf",
+        label_visibility="collapsed",
+    )
+    st.markdown('<div class="mixer-label">MIN CONFIDENCE</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+with mixer_cols[1]:
+    st.markdown('<div class="mixer-channel">', unsafe_allow_html=True)
+    min_signal_delta = st.slider(
+        "Min Delta",
+        0.0,
+        15.0,
+        1.0,
+        0.5,
+        key="team_min_delta",
+        label_visibility="collapsed",
+    )
+    st.markdown('<div class="mixer-label">MIN DELTA</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+with mixer_cols[2]:
+    st.markdown('<div class="mixer-channel">', unsafe_allow_html=True)
+    min_signal_sample = st.slider(
+        "Min Opponent Sample",
+        1,
+        10,
+        5,
+        key="team_min_sample",
+        label_visibility="collapsed",
+    )
+    st.markdown('<div class="mixer-label">MIN OPP SAMPLE</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 signal_include_combo = st.checkbox("Signal Board: Include combo stats", value=True, key="team_include_combo")
 
 if st.session_state.get("team_analysis_inputs_snapshot") != _team_inputs_snapshot():
@@ -641,10 +721,10 @@ if st.button("Load Matchup"):
             load_matchup_log("Completed.", 100)
 
 if "team_signal_df" in st.session_state and "team_summary_df" in st.session_state:
-    render_top_signals_panel(st.session_state["team_signal_df"])
-    _render_quick_signal_hit_rate(
+    render_top_signals_panel(
         st.session_state["team_signal_df"],
-        st.session_state.get("team_player_context_map", {}),
+        theme_name=active_theme["key"],
+        player_context_map=st.session_state.get("team_player_context_map", {}),
         section_key="single_team",
     )
     if SHOW_TEAM_SUMMARY:
@@ -653,20 +733,20 @@ if "team_signal_df" in st.session_state and "team_summary_df" in st.session_stat
 if st.session_state.get("matchup_analysis_ready"):
     st.markdown("### Matchup View")
     st.markdown(f"#### {st.session_state.get('matchup_team_a_name', selected_team)}")
-    render_top_signals_panel(st.session_state.get("matchup_team_a_signal_df", pd.DataFrame()))
-    _render_quick_signal_hit_rate(
+    render_top_signals_panel(
         st.session_state.get("matchup_team_a_signal_df", pd.DataFrame()),
-        st.session_state.get("matchup_team_a_context_map", {}),
+        theme_name=active_theme["key"],
+        player_context_map=st.session_state.get("matchup_team_a_context_map", {}),
         section_key="matchup_team_a",
     )
     if SHOW_TEAM_SUMMARY:
         render_team_summary_table(st.session_state.get("matchup_team_a_summary_df", pd.DataFrame()))
 
     st.markdown(f"#### {st.session_state.get('matchup_team_b_name', opponent_team)}")
-    render_top_signals_panel(st.session_state.get("matchup_team_b_signal_df", pd.DataFrame()))
-    _render_quick_signal_hit_rate(
+    render_top_signals_panel(
         st.session_state.get("matchup_team_b_signal_df", pd.DataFrame()),
-        st.session_state.get("matchup_team_b_context_map", {}),
+        theme_name=active_theme["key"],
+        player_context_map=st.session_state.get("matchup_team_b_context_map", {}),
         section_key="matchup_team_b",
     )
     if SHOW_TEAM_SUMMARY:
