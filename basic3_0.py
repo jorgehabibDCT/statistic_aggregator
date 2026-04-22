@@ -40,8 +40,8 @@ from utils.constants import (
     STABILITY_THRESHOLDS,
 )
 
-st.set_page_config(page_title="NBA Player Matchup Stats", layout="centered")
-st.title("Little Bucket Book")
+st.set_page_config(page_title="The Matchup Method", layout="centered")
+st.title("The Matchup Method")
 st.caption("Matchup trend analysis for player role and performance splits.")
 
 APP_VERSION = "v0.3.0"
