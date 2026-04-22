@@ -171,6 +171,13 @@ if not roster_players:
     st.stop()
 
 sorted_roster_players = sorted(roster_players)
+# Apply any deferred quick-pick before player widget is instantiated.
+if "pending_player_select" in st.session_state:
+    pending_player = st.session_state["pending_player_select"]
+    if pending_player in sorted_roster_players:
+        st.session_state["player_select"] = pending_player
+    st.session_state.pop("pending_player_select", None)
+
 if "player_select" not in st.session_state:
     st.session_state["player_select"] = "Jayson Tatum" if "Jayson Tatum" in sorted_roster_players else sorted_roster_players[0]
 elif st.session_state["player_select"] not in sorted_roster_players:
@@ -283,9 +290,9 @@ if "team_signal_df" in st.session_state and "team_summary_df" in st.session_stat
 
     team_players = st.session_state["team_summary_df"]["player"].tolist() if not st.session_state["team_summary_df"].empty else []
     if team_players:
-        quick_player = st.selectbox("Quick Select Player from Team Analysis", sorted(team_players), key="team_quick_player")
+        quick_player = st.selectbox("Quick Select Player from Team Analysis", sorted(team_players), key="quick_player_select")
         if st.button("Load Player into Detail View"):
-            st.session_state["player_select"] = quick_player
+            st.session_state["pending_player_select"] = quick_player
             st.session_state["analysis_ready"] = False
             st.rerun()
 

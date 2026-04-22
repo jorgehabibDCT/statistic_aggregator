@@ -21,6 +21,7 @@ def build_player_summary_row(player_name, stat_results, profile, min_sample):
         "best_elevated_delta": float(best_row["delta"]),
         "strongest_negative_stat": worst_row["stat"],
         "most_stable_stat": stable_row["stat"],
+        "most_stable_avg": float(stable_row["vs_avg"]) if "vs_avg" in stable_row and pd.notna(stable_row["vs_avg"]) else None,
         "stability_label": stable_row["stability_label"],
         "overall_confidence": overall_confidence,
         "profile": profile,

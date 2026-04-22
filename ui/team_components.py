@@ -45,6 +45,7 @@ def render_team_summary_table(summary_df):
                 "best_elevated_delta",
                 "strongest_negative_stat",
                 "most_stable_stat",
+                "most_stable_avg",
                 "stability_label",
                 "overall_confidence",
                 "profile",
