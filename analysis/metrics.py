@@ -6,13 +6,14 @@ from analysis.classifiers import classify_split, classify_stability
 
 def add_combo_stats(games):
     df = games.copy()
-    for col in ["PTS", "REB", "AST"]:
+    for col in ["PTS", "REB", "AST", "STL", "BLK"]:
         if col not in df.columns:
             df[col] = 0
     df["PR"] = pd.to_numeric(df["PTS"], errors="coerce").fillna(0) + pd.to_numeric(df["REB"], errors="coerce").fillna(0)
     df["PA"] = pd.to_numeric(df["PTS"], errors="coerce").fillna(0) + pd.to_numeric(df["AST"], errors="coerce").fillna(0)
     df["RA"] = pd.to_numeric(df["REB"], errors="coerce").fillna(0) + pd.to_numeric(df["AST"], errors="coerce").fillna(0)
     df["PRA"] = df["PR"] + pd.to_numeric(df["AST"], errors="coerce").fillna(0)
+    df["BS"] = pd.to_numeric(df["BLK"], errors="coerce").fillna(0) + pd.to_numeric(df["STL"], errors="coerce").fillna(0)
     return df
 
 

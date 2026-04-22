@@ -3,10 +3,16 @@ def infer_player_profile(stat_results):
     pts = by_stat.get("PTS", {})
     reb = by_stat.get("REB", {})
     ast = by_stat.get("AST", {})
+    stl = by_stat.get("STL", {})
+    blk = by_stat.get("BLK", {})
+    bs = by_stat.get("BS", {})
 
     pts_delta = pts.get("delta", 0)
     reb_delta = reb.get("delta", 0)
     ast_delta = ast.get("delta", 0)
+    stl_delta = stl.get("delta", 0)
+    blk_delta = blk.get("delta", 0)
+    bs_delta = bs.get("delta", 0)
 
     high_vol_count = int((stat_results["stability_label"] == "high volatility").sum())
     all_main_negative = pts_delta < 0 and reb_delta < 0 and ast_delta < 0
@@ -21,6 +27,8 @@ def infer_player_profile(stat_results):
         return "facilitator profile"
     if reb_delta > 1.0 and pts_delta < 0:
         return "rebound-heavy matchup"
+    if bs_delta > 1.0 and (stl_delta > 0.4 or blk_delta > 0.4):
+        return "defensive events uplift"
     if (reb_delta + ast_delta) > 1.5 and pts_delta <= 0.5:
         return "peripheral-driven matchup"
     return "balanced / neutral profile"

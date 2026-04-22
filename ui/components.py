@@ -1,13 +1,17 @@
 import streamlit as st
 
 
+def format_stat_label(stat_name):
+    return "B+S" if stat_name == "BS" else stat_name
+
+
 def render_summary_cards(best_row, worst_row, stable_row, volatile_row, profile, overall_confidence):
     st.subheader("Insight Snapshot")
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Best Elevated Stat", f"{best_row['stat']} ({best_row['delta']:+.1f})")
-    col2.metric("Most Suppressed Stat", f"{worst_row['stat']} ({worst_row['delta']:+.1f})")
-    col3.metric("Most Stable Stat", f"{stable_row['stat']} ({stable_row['stability_label']})")
-    col4.metric("Most Volatile Stat", f"{volatile_row['stat']} ({volatile_row['stability_label']})")
+    col1.metric("Best Elevated Stat", f"{format_stat_label(best_row['stat'])} ({best_row['delta']:+.1f})")
+    col2.metric("Most Suppressed Stat", f"{format_stat_label(worst_row['stat'])} ({worst_row['delta']:+.1f})")
+    col3.metric("Most Stable Stat", f"{format_stat_label(stable_row['stat'])} ({stable_row['stability_label']})")
+    col4.metric("Most Volatile Stat", f"{format_stat_label(volatile_row['stat'])} ({volatile_row['stability_label']})")
 
     st.markdown(f"**Profile:** `{profile}`")
     st.progress(min(max(overall_confidence, 0), 100), text=f"Overall Confidence: {overall_confidence}/100")
@@ -15,6 +19,8 @@ def render_summary_cards(best_row, worst_row, stable_row, volatile_row, profile,
 
 def render_comparison_table(stat_results):
     st.subheader("Split Comparison")
+    display_df = stat_results.copy()
+    display_df["stat"] = display_df["stat"].apply(format_stat_label)
     display_cols = [
         "stat",
         "vs_avg",
@@ -28,7 +34,7 @@ def render_comparison_table(stat_results):
         "confidence",
         "vs_sample_size",
     ]
-    st.dataframe(stat_results[display_cols], use_container_width=True)
+    st.dataframe(display_df[display_cols], use_container_width=True)
 
 
 def render_low_sample_warning(vs_sample_size, threshold):
@@ -46,7 +52,7 @@ def render_summary_text(text):
 def render_hit_rate_panel(stat_name, threshold, vs_result, overall_result, benchmark_thresholds):
     st.subheader("Hit-Rate Analysis")
     st.caption("Generic threshold analysis for matchup trend context.")
-    st.markdown(f"**Selected:** `{stat_name}` at threshold `>= {threshold}`")
+    st.markdown(f"**Selected:** `{format_stat_label(stat_name)}` at threshold `>= {threshold}`")
 
     col1, col2 = st.columns(2)
     col1.metric(
@@ -61,4 +67,4 @@ def render_hit_rate_panel(stat_name, threshold, vs_result, overall_result, bench
     )
 
     if benchmark_thresholds:
-        st.caption(f"Auto benchmarks for {stat_name}: {', '.join(str(v) for v in benchmark_thresholds)}")
+        st.caption(f"Auto benchmarks for {format_stat_label(stat_name)}: {', '.join(str(v) for v in benchmark_thresholds)}")
