@@ -48,6 +48,8 @@ st.caption("Matchup trend analysis for player role and performance splits.")
 APP_VERSION = "v0.3.0"
 FETCH_RETRIES = 3
 FETCH_BACKOFF_SECONDS = 0.8
+SHOW_TEAM_SUMMARY = False
+SHOW_PLAYER_DETAIL = False
 
 # === SETUP ===
 team_list = sorted(teams.get_teams(), key=lambda x: x['full_name'])
@@ -334,6 +336,7 @@ def _run_team_analysis_for_roster(
 ):
     team_summary_rows_local = []
     signal_rows_local = []
+    player_sample_context_local = {}
 
     for roster_player in roster_player_names:
         player_analysis = _run_single_player_analysis(
@@ -351,6 +354,11 @@ def _run_team_analysis_for_roster(
         )
         if not player_analysis:
             continue
+
+        player_sample_context_local[roster_player] = {
+            "vs_for_analysis": player_analysis["vs_for_analysis"],
+            "overall_for_analysis": player_analysis["overall_for_analysis"],
+        }
 
         summary_row = build_player_summary_row(
             roster_player,
@@ -384,7 +392,67 @@ def _run_team_analysis_for_roster(
             & (signal_df_local["opponent_sample_adequate"])
         ].reset_index(drop=True)
 
-    return team_summary_df_local, signal_df_local
+    return team_summary_df_local, signal_df_local, player_sample_context_local
+
+
+def _render_quick_signal_hit_rate(signal_df, player_context_map, section_key):
+    if signal_df.empty or not player_context_map:
+        return
+
+    with st.expander("Quick Hit-Rate Check", expanded=False):
+        top_for_check = signal_df.head(12).copy()
+        if top_for_check.empty:
+            st.caption("No top signals available for quick hit-rate checks.")
+            return
+
+        option_labels = []
+        option_map = {}
+        for idx, row in top_for_check.iterrows():
+            label = f"{row['player']} — {format_stat_label(row['stat'])} ({row['delta']:+.1f})"
+            option_labels.append(label)
+            option_map[label] = {
+                "player": row["player"],
+                "stat": row["stat"],
+                "row_id": f"{section_key}_{idx}",
+            }
+
+        selected_signal_label = st.selectbox(
+            "Top Signal",
+            option_labels,
+            key=f"{section_key}_quick_signal_select",
+        )
+        selected_signal = option_map[selected_signal_label]
+
+        threshold = st.number_input(
+            "Line / Threshold (>=)",
+            min_value=0.0,
+            step=0.5,
+            value=10.0,
+            key=f"{section_key}_quick_signal_threshold",
+            format="%.1f",
+        )
+
+        player_name_for_check = selected_signal["player"]
+        stat_for_check = selected_signal["stat"]
+        context = player_context_map.get(player_name_for_check)
+        if not context:
+            st.caption("No sample context available for this signal.")
+            return
+
+        vs_result = compute_hit_rate(context["vs_for_analysis"], stat_for_check, threshold)
+        overall_result = compute_hit_rate(context["overall_for_analysis"], stat_for_check, threshold)
+
+        col1, col2 = st.columns(2)
+        col1.metric(
+            "Vs Opponent",
+            f"{vs_result['hit_rate_pct']}%",
+            f"{vs_result['hits']}/{vs_result['attempts']}",
+        )
+        col2.metric(
+            "Overall",
+            f"{overall_result['hit_rate_pct']}%",
+            f"{overall_result['hits']}/{overall_result['attempts']}",
+        )
 
 # === INPUTS ===
 selected_team = st.selectbox("Select Team", team_names, index=team_names.index("Boston Celtics"))
@@ -460,7 +528,7 @@ if st.session_state.get("team_analysis_inputs_snapshot") != _team_inputs_snapsho
 if st.session_state.get("team_analysis_ready"):
     opp_abbr_for_team = get_team_abbreviation(opponent_team)
     with st.spinner("Running team signal scan..."):
-        team_summary_df, signal_df = _run_team_analysis_for_roster(
+        team_summary_df, signal_df, player_context_map = _run_team_analysis_for_roster(
             sorted_roster_players,
             opp_abbr_for_team,
             num_games,
@@ -479,6 +547,7 @@ if st.session_state.get("team_analysis_ready"):
 
     st.session_state["team_summary_df"] = team_summary_df
     st.session_state["team_signal_df"] = signal_df
+    st.session_state["team_player_context_map"] = player_context_map
 
 if st.button("Load Matchup"):
     load_matchup_log = _start_live_log("load_matchup", "Load Matchup Live Log", show_live_analysis_log)
@@ -504,7 +573,7 @@ if st.button("Load Matchup"):
         with st.spinner("Loading matchup for both teams..."):
             if load_matchup_log:
                 load_matchup_log(f"Analyzing {selected_team}.", 40)
-            team_a_summary_df, team_a_signal_df = _run_team_analysis_for_roster(
+            team_a_summary_df, team_a_signal_df, team_a_context_map = _run_team_analysis_for_roster(
                 sorted_roster_players,
                 get_team_abbreviation(opponent_team),
                 num_games,
@@ -523,7 +592,7 @@ if st.button("Load Matchup"):
             )
             if load_matchup_log:
                 load_matchup_log(f"Analyzing {opponent_team}.", 70)
-            team_b_summary_df, team_b_signal_df = _run_team_analysis_for_roster(
+            team_b_summary_df, team_b_signal_df, team_b_context_map = _run_team_analysis_for_roster(
                 sorted(opponent_roster),
                 get_team_abbreviation(selected_team),
                 num_games,
@@ -552,6 +621,8 @@ if st.button("Load Matchup"):
         st.session_state["matchup_team_a_signal_df"] = team_a_signal_df
         st.session_state["matchup_team_b_summary_df"] = team_b_summary_df
         st.session_state["matchup_team_b_signal_df"] = team_b_signal_df
+        st.session_state["matchup_team_a_context_map"] = team_a_context_map
+        st.session_state["matchup_team_b_context_map"] = team_b_context_map
         combined_options, combined_mapping = _build_matchup_player_options(
             sorted_roster_players,
             sorted(opponent_roster),
@@ -571,20 +642,38 @@ if st.button("Load Matchup"):
 
 if "team_signal_df" in st.session_state and "team_summary_df" in st.session_state:
     render_top_signals_panel(st.session_state["team_signal_df"])
-    render_team_summary_table(st.session_state["team_summary_df"])
+    _render_quick_signal_hit_rate(
+        st.session_state["team_signal_df"],
+        st.session_state.get("team_player_context_map", {}),
+        section_key="single_team",
+    )
+    if SHOW_TEAM_SUMMARY:
+        render_team_summary_table(st.session_state["team_summary_df"])
 
 if st.session_state.get("matchup_analysis_ready"):
     st.markdown("### Matchup View")
     st.markdown(f"#### {st.session_state.get('matchup_team_a_name', selected_team)}")
     render_top_signals_panel(st.session_state.get("matchup_team_a_signal_df", pd.DataFrame()))
-    render_team_summary_table(st.session_state.get("matchup_team_a_summary_df", pd.DataFrame()))
+    _render_quick_signal_hit_rate(
+        st.session_state.get("matchup_team_a_signal_df", pd.DataFrame()),
+        st.session_state.get("matchup_team_a_context_map", {}),
+        section_key="matchup_team_a",
+    )
+    if SHOW_TEAM_SUMMARY:
+        render_team_summary_table(st.session_state.get("matchup_team_a_summary_df", pd.DataFrame()))
 
     st.markdown(f"#### {st.session_state.get('matchup_team_b_name', opponent_team)}")
     render_top_signals_panel(st.session_state.get("matchup_team_b_signal_df", pd.DataFrame()))
-    render_team_summary_table(st.session_state.get("matchup_team_b_summary_df", pd.DataFrame()))
+    _render_quick_signal_hit_rate(
+        st.session_state.get("matchup_team_b_signal_df", pd.DataFrame()),
+        st.session_state.get("matchup_team_b_context_map", {}),
+        section_key="matchup_team_b",
+    )
+    if SHOW_TEAM_SUMMARY:
+        render_team_summary_table(st.session_state.get("matchup_team_b_summary_df", pd.DataFrame()))
     _render_saved_live_log("load_matchup", "Load Matchup Live Log", show_live_analysis_log)
 
-if st.session_state.get("team_analysis_ready"):
+if SHOW_PLAYER_DETAIL and st.session_state.get("team_analysis_ready"):
     if st.session_state.get("matchup_analysis_ready"):
         matchup_player_options = st.session_state.get("matchup_player_options", [])
         if matchup_player_options:
@@ -618,7 +707,8 @@ if st.session_state.get("team_analysis_ready"):
         detail_team_name = selected_team
         detail_opponent_name = opponent_team
 else:
-    st.info("Load Matchup to unlock player-level insights.")
+    if SHOW_PLAYER_DETAIL:
+        st.info("Load Matchup to unlock player-level insights.")
     st.session_state["analysis_ready"] = False
     detail_team_name = selected_team
     detail_opponent_name = opponent_team
@@ -645,7 +735,7 @@ def _analysis_inputs_snapshot():
 if st.session_state.get("analysis_inputs_snapshot") != _analysis_inputs_snapshot():
     st.session_state["analysis_ready"] = False
 
-if st.session_state.get("team_analysis_ready"):
+if SHOW_PLAYER_DETAIL and st.session_state.get("team_analysis_ready"):
     if st.button("Run Analysis"):
         run_analysis_log = _start_live_log("run_analysis", "Run Analysis Live Log", show_live_analysis_log)
         if run_analysis_log:
@@ -660,7 +750,7 @@ if st.session_state.get("team_analysis_ready"):
 
 # === MAIN LOGIC ===
 # Persist results across reruns (e.g. hit-rate widget changes); button alone would drop the block next run.
-if st.session_state.get("analysis_ready"):
+if SHOW_PLAYER_DETAIL and st.session_state.get("analysis_ready"):
     try:
         run_analysis_log = _start_live_log("run_analysis", "Run Analysis Live Log", show_live_analysis_log) if st.session_state.get("run_analysis_action_started") else None
         st.session_state["run_analysis_action_started"] = False
