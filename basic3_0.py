@@ -380,10 +380,6 @@ if st.session_state.get("team_analysis_inputs_snapshot") != _team_inputs_snapsho
     st.session_state["team_analysis_ready"] = False
     st.session_state["matchup_analysis_ready"] = False
 
-if st.button("Run Team Analysis"):
-    st.session_state["team_analysis_ready"] = True
-    st.session_state["team_analysis_inputs_snapshot"] = _team_inputs_snapshot()
-
 if st.session_state.get("team_analysis_ready"):
     opp_abbr_for_team = get_team_abbreviation(opponent_team)
     with st.spinner("Running team signal scan..."):
@@ -477,7 +473,7 @@ if st.session_state.get("matchup_analysis_ready"):
 if st.session_state.get("team_analysis_ready"):
     player_name = st.selectbox("Select Player for Detail View", sorted_roster_players, key="player_select")
 else:
-    st.info("Run Team Analysis to unlock player-level insights.")
+    st.info("Load Matchup to unlock player-level insights.")
     st.session_state["analysis_ready"] = False
 
 
