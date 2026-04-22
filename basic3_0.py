@@ -66,7 +66,10 @@ def get_team_id(name):
     return get_team_by_name(name)['id']
 
 def get_player_id(name):
-    return players.find_players_by_full_name(name)[0]['id']
+    matches = players.find_players_by_full_name(name)
+    if not matches:
+        return None
+    return matches[0]["id"]
 
 
 def _call_with_retries(fetch_fn, context_label, retries=FETCH_RETRIES, backoff_seconds=FETCH_BACKOFF_SECONDS):
@@ -247,8 +250,13 @@ def _run_single_player_analysis(
     include_combo,
     exclude_high,
     exclude_low,
+    live_log_update=None,
 ):
     player_id = get_player_id(player_name_to_analyze)
+    if player_id is None:
+        if live_log_update:
+            live_log_update(f"Skipping {player_name_to_analyze}: could not resolve player ID")
+        return None
     all_games_local = pd.DataFrame()
     for season in seasons:
         log = fetch_player_log_by_source(player_id, season, game_source, exclude_last_regular_games)
@@ -322,6 +330,7 @@ def _run_team_analysis_for_roster(
     min_delta,
     min_sample,
     include_combo_signals,
+    live_log_update=None,
 ):
     team_summary_rows_local = []
     signal_rows_local = []
@@ -338,6 +347,7 @@ def _run_team_analysis_for_roster(
             include_combo,
             exclude_high,
             exclude_low,
+            live_log_update=live_log_update,
         )
         if not player_analysis:
             continue
@@ -509,6 +519,7 @@ if st.button("Load Matchup"):
                 min_signal_delta,
                 min_signal_sample,
                 signal_include_combo,
+                live_log_update=load_matchup_log,
             )
             if load_matchup_log:
                 load_matchup_log(f"Analyzing {opponent_team}.", 70)
@@ -527,6 +538,7 @@ if st.button("Load Matchup"):
                 min_signal_delta,
                 min_signal_sample,
                 signal_include_combo,
+                live_log_update=load_matchup_log,
             )
             if load_matchup_log:
                 load_matchup_log("Building summary tables and top signals.", 88)
