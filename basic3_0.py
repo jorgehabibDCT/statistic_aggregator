@@ -156,6 +156,8 @@ def fetch_player_log_by_source(player_id, season, game_source, exclude_last_regu
 
 @st.cache_data(ttl=3600)
 def filter_games_vs_opponent(log_df, opp_abbr):
+    if log_df is None or log_df.empty or "MATCHUP" not in log_df.columns:
+        return pd.DataFrame()
     return log_df[log_df["MATCHUP"].str.contains(opp_abbr, na=False)].copy()
 
 
