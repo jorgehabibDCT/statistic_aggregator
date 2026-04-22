@@ -183,7 +183,7 @@ if "player_select" not in st.session_state:
 elif st.session_state["player_select"] not in sorted_roster_players:
     st.session_state["player_select"] = sorted_roster_players[0]
 
-player_name = st.selectbox("Select Player", sorted_roster_players, key="player_select")
+player_name = st.session_state["player_select"]
 opponent_team = st.selectbox("Select Opponent Team", [t for t in team_names if t != selected_team], index=team_names.index("Miami Heat"))
 num_games = st.slider("Number of Games", 1, 20, 10)
 
@@ -296,6 +296,12 @@ if "team_signal_df" in st.session_state and "team_summary_df" in st.session_stat
             st.session_state["analysis_ready"] = False
             st.rerun()
 
+if st.session_state.get("team_analysis_ready"):
+    player_name = st.selectbox("Select Player", sorted_roster_players, key="player_select")
+else:
+    st.info("Run Team Analysis to unlock player-level insights.")
+    st.session_state["analysis_ready"] = False
+
 
 def _analysis_inputs_snapshot():
     """Snapshot of inputs that require re-running analysis when changed."""
@@ -317,13 +323,14 @@ def _analysis_inputs_snapshot():
 if st.session_state.get("analysis_inputs_snapshot") != _analysis_inputs_snapshot():
     st.session_state["analysis_ready"] = False
 
-if st.button("Run Analysis"):
-    st.session_state["analysis_ready"] = True
-    st.session_state["analysis_inputs_snapshot"] = _analysis_inputs_snapshot()
-    # Fresh run: show hit-rate results once without requiring form submit first
-    st.session_state["_hit_rate_results_shown"] = False
-    # New analysis: pick up benchmark default threshold for current stat (do not clobber in-form edits)
-    st.session_state.pop("hit_rate_threshold_input", None)
+if st.session_state.get("team_analysis_ready"):
+    if st.button("Run Analysis"):
+        st.session_state["analysis_ready"] = True
+        st.session_state["analysis_inputs_snapshot"] = _analysis_inputs_snapshot()
+        # Fresh run: show hit-rate results once without requiring form submit first
+        st.session_state["_hit_rate_results_shown"] = False
+        # New analysis: pick up benchmark default threshold for current stat (do not clobber in-form edits)
+        st.session_state.pop("hit_rate_threshold_input", None)
 
 # === MAIN LOGIC ===
 # Persist results across reruns (e.g. hit-rate widget changes); button alone would drop the block next run.
