@@ -81,6 +81,70 @@ def _call_with_retries(fetch_fn, context_label, retries=FETCH_RETRIES, backoff_s
     return None, f"{context_label} failed after {retries} attempts: {last_error}"
 
 
+def _build_matchup_player_options(team_a_players, team_b_players, team_a_name, team_b_name):
+    counts = {}
+    for player in team_a_players + team_b_players:
+        counts[player] = counts.get(player, 0) + 1
+
+    options = []
+    mapping = {}
+    for player in sorted(team_a_players):
+        label = player if counts.get(player, 0) == 1 else f"{player} ({team_a_name})"
+        options.append(label)
+        mapping[label] = {
+            "player_name": player,
+            "team_name": team_a_name,
+            "opponent_name": team_b_name,
+        }
+    for player in sorted(team_b_players):
+        label = player if counts.get(player, 0) == 1 else f"{player} ({team_b_name})"
+        options.append(label)
+        mapping[label] = {
+            "player_name": player,
+            "team_name": team_b_name,
+            "opponent_name": team_a_name,
+        }
+    return options, mapping
+
+
+def _start_live_log(action_key, title, enabled):
+    if not enabled:
+        return None
+
+    st.session_state[f"{action_key}_log_lines"] = []
+    st.session_state[f"{action_key}_log_progress"] = 0
+
+    container = st.container()
+    container.markdown(f"#### {title}")
+    status_placeholder = container.empty()
+    progress_placeholder = container.empty()
+    lines_placeholder = container.empty()
+    progress_placeholder.progress(0)
+
+    def _update(message, progress_value=None):
+        st.session_state[f"{action_key}_log_lines"].append(message)
+        if progress_value is not None:
+            st.session_state[f"{action_key}_log_progress"] = max(0, min(100, int(progress_value)))
+            progress_placeholder.progress(st.session_state[f"{action_key}_log_progress"])
+        status_placeholder.write(message)
+        lines_placeholder.markdown("\n".join(f"- {line}" for line in st.session_state[f"{action_key}_log_lines"]))
+
+    return _update
+
+
+def _render_saved_live_log(action_key, title, enabled):
+    if not enabled:
+        return
+    lines = st.session_state.get(f"{action_key}_log_lines", [])
+    if not lines:
+        return
+    progress_value = int(st.session_state.get(f"{action_key}_log_progress", 0))
+    with st.container():
+        st.markdown(f"#### {title}")
+        st.progress(max(0, min(100, progress_value)))
+        st.markdown("\n".join(f"- {line}" for line in lines))
+
+
 @st.cache_data(ttl=3600)
 def fetch_roster(team_id, season):
     def _request():
@@ -338,6 +402,7 @@ exclude_last_regular_games = st.selectbox("Exclude Last X Regular-Season Games",
 if game_source == "Playoffs":
     st.caption("Exclude Last X Regular-Season Games applies only to Regular Season and Combined sources.")
 num_games = st.slider("Number of Games", 1, 20, 10)
+show_live_analysis_log = st.checkbox("Show Live Analysis Log", value=False)
 
 st.markdown("### Insight Controls")
 vs_sample_size = st.selectbox(
@@ -406,15 +471,29 @@ if st.session_state.get("team_analysis_ready"):
     st.session_state["team_signal_df"] = signal_df
 
 if st.button("Load Matchup"):
+    load_matchup_log = _start_live_log("load_matchup", "Load Matchup Live Log", show_live_analysis_log)
+    if load_matchup_log:
+        load_matchup_log("Starting matchup load.", 5)
+        load_matchup_log("Fetching selected team roster.", 12)
     opponent_team_id = get_team_id(opponent_team)
+    if load_matchup_log:
+        load_matchup_log("Fetching opponent team roster.", 20)
     opponent_roster, opponent_roster_error = fetch_roster(opponent_team_id, seasons[0])
     if opponent_roster_error:
         st.warning("Opponent roster fetch is temporarily unavailable. Please retry shortly.")
         st.caption(opponent_roster_error)
+        if load_matchup_log:
+            load_matchup_log(f"Opponent roster fetch failed: {opponent_roster_error}", 100)
     if not opponent_roster:
         st.warning("No roster data found for opponent team.")
+        if load_matchup_log:
+            load_matchup_log("No opponent roster data returned.", 100)
     else:
+        if load_matchup_log:
+            load_matchup_log("Building combined matchup player list.", 28)
         with st.spinner("Loading matchup for both teams..."):
+            if load_matchup_log:
+                load_matchup_log(f"Analyzing {selected_team}.", 40)
             team_a_summary_df, team_a_signal_df = _run_team_analysis_for_roster(
                 sorted_roster_players,
                 get_team_abbreviation(opponent_team),
@@ -431,6 +510,8 @@ if st.button("Load Matchup"):
                 min_signal_sample,
                 signal_include_combo,
             )
+            if load_matchup_log:
+                load_matchup_log(f"Analyzing {opponent_team}.", 70)
             team_b_summary_df, team_b_signal_df = _run_team_analysis_for_roster(
                 sorted(opponent_roster),
                 get_team_abbreviation(selected_team),
@@ -447,6 +528,8 @@ if st.button("Load Matchup"):
                 min_signal_sample,
                 signal_include_combo,
             )
+            if load_matchup_log:
+                load_matchup_log("Building summary tables and top signals.", 88)
 
         st.session_state["team_analysis_ready"] = True
         st.session_state["team_analysis_inputs_snapshot"] = _team_inputs_snapshot()
@@ -457,6 +540,22 @@ if st.button("Load Matchup"):
         st.session_state["matchup_team_a_signal_df"] = team_a_signal_df
         st.session_state["matchup_team_b_summary_df"] = team_b_summary_df
         st.session_state["matchup_team_b_signal_df"] = team_b_signal_df
+        combined_options, combined_mapping = _build_matchup_player_options(
+            sorted_roster_players,
+            sorted(opponent_roster),
+            selected_team,
+            opponent_team,
+        )
+        st.session_state["matchup_player_options"] = combined_options
+        st.session_state["matchup_player_mapping"] = combined_mapping
+        if combined_options:
+            if (
+                "matchup_player_select" not in st.session_state
+                or st.session_state["matchup_player_select"] not in combined_options
+            ):
+                st.session_state["matchup_player_select"] = combined_options[0]
+        if load_matchup_log:
+            load_matchup_log("Completed.", 100)
 
 if "team_signal_df" in st.session_state and "team_summary_df" in st.session_state:
     render_top_signals_panel(st.session_state["team_signal_df"])
@@ -471,12 +570,46 @@ if st.session_state.get("matchup_analysis_ready"):
     st.markdown(f"#### {st.session_state.get('matchup_team_b_name', opponent_team)}")
     render_top_signals_panel(st.session_state.get("matchup_team_b_signal_df", pd.DataFrame()))
     render_team_summary_table(st.session_state.get("matchup_team_b_summary_df", pd.DataFrame()))
+    _render_saved_live_log("load_matchup", "Load Matchup Live Log", show_live_analysis_log)
 
 if st.session_state.get("team_analysis_ready"):
-    player_name = st.selectbox("Select Player for Detail View", sorted_roster_players, key="player_select")
+    if st.session_state.get("matchup_analysis_ready"):
+        matchup_player_options = st.session_state.get("matchup_player_options", [])
+        if matchup_player_options:
+            if (
+                "matchup_player_select" not in st.session_state
+                or st.session_state["matchup_player_select"] not in matchup_player_options
+            ):
+                st.session_state["matchup_player_select"] = matchup_player_options[0]
+            selected_player_label = st.selectbox(
+                "Select Player for Detail View",
+                matchup_player_options,
+                key="matchup_player_select",
+            )
+            selected_player_context = st.session_state.get("matchup_player_mapping", {}).get(
+                selected_player_label
+            )
+            if selected_player_context:
+                player_name = selected_player_context["player_name"]
+                st.session_state["player_select"] = player_name
+                detail_team_name = selected_player_context["team_name"]
+                detail_opponent_name = selected_player_context["opponent_name"]
+            else:
+                detail_team_name = selected_team
+                detail_opponent_name = opponent_team
+        else:
+            player_name = st.selectbox("Select Player for Detail View", sorted_roster_players, key="player_select")
+            detail_team_name = selected_team
+            detail_opponent_name = opponent_team
+    else:
+        player_name = st.selectbox("Select Player for Detail View", sorted_roster_players, key="player_select")
+        detail_team_name = selected_team
+        detail_opponent_name = opponent_team
 else:
     st.info("Load Matchup to unlock player-level insights.")
     st.session_state["analysis_ready"] = False
+    detail_team_name = selected_team
+    detail_opponent_name = opponent_team
 
 
 def _analysis_inputs_snapshot():
@@ -502,18 +635,31 @@ if st.session_state.get("analysis_inputs_snapshot") != _analysis_inputs_snapshot
 
 if st.session_state.get("team_analysis_ready"):
     if st.button("Run Analysis"):
+        run_analysis_log = _start_live_log("run_analysis", "Run Analysis Live Log", show_live_analysis_log)
+        if run_analysis_log:
+            run_analysis_log("Starting player analysis.", 5)
         st.session_state["analysis_ready"] = True
         st.session_state["analysis_inputs_snapshot"] = _analysis_inputs_snapshot()
         # Fresh run: show hit-rate results once without requiring form submit first
         st.session_state["_hit_rate_results_shown"] = False
         # New analysis: pick up benchmark default threshold for current stat (do not clobber in-form edits)
         st.session_state.pop("hit_rate_threshold_input", None)
+        st.session_state["run_analysis_action_started"] = True
 
 # === MAIN LOGIC ===
 # Persist results across reruns (e.g. hit-rate widget changes); button alone would drop the block next run.
 if st.session_state.get("analysis_ready"):
     try:
-        opp_abbr = get_team_abbreviation(opponent_team)
+        run_analysis_log = _start_live_log("run_analysis", "Run Analysis Live Log", show_live_analysis_log) if st.session_state.get("run_analysis_action_started") else None
+        st.session_state["run_analysis_action_started"] = False
+        if run_analysis_log:
+            run_analysis_log("Fetching player logs.", 15)
+            run_analysis_log(f"Applying game-source mode: {game_source}.", 24)
+            run_analysis_log(f"Excluding last {exclude_last_regular_games} regular-season games.", 30)
+
+        opp_abbr = get_team_abbreviation(detail_opponent_name)
+        if run_analysis_log:
+            run_analysis_log("Filtering vs opponent and building baseline.", 45)
         player_analysis = _run_single_player_analysis(
             player_name,
             opp_abbr,
@@ -528,8 +674,12 @@ if st.session_state.get("analysis_ready"):
         )
         if not player_analysis:
             st.warning("No games found vs the selected opponent for the queried seasons.")
+            if run_analysis_log:
+                run_analysis_log("No usable data returned for selected player.", 100)
             st.stop()
 
+        if run_analysis_log:
+            run_analysis_log("Applying outlier controls and computing summaries.", 65)
         all_games = player_analysis["all_games"]
         log_recent = player_analysis["log_recent"]
         vs_for_analysis = player_analysis["vs_for_analysis"]
@@ -537,7 +687,10 @@ if st.session_state.get("analysis_ready"):
         stat_results = player_analysis["stat_results"]
         profile = player_analysis["profile"]
 
-        st.subheader(f"📊 {player_name}'s Last {len(all_games)} Games vs {opponent_team}")
+        if run_analysis_log:
+            run_analysis_log("Computing confidence/profile and preparing UI.", 82)
+
+        st.subheader(f"📊 {player_name}'s Last {len(all_games)} Games vs {detail_opponent_name}")
         st.dataframe(all_games[["SEASON_ID", "GAME_DATE", "MATCHUP"] + stat_targets])
 
         # Also show overall last 10 games
@@ -619,6 +772,10 @@ if st.session_state.get("analysis_ready"):
             f"Status: vs sample={len(vs_for_analysis)}, overall sample={len(overall_for_analysis)} | "
             f"outlier exclusion={'on' if (exclude_high_outlier or exclude_low_outlier) else 'off'} | {APP_VERSION}"
         )
+        if run_analysis_log:
+            run_analysis_log("Rendering charts/tables and completing analysis.", 100)
+        _render_saved_live_log("run_analysis", "Run Analysis Live Log", show_live_analysis_log)
 
     except Exception as e:
         st.error(f"API/network failure or unexpected error. Please retry in a moment. Details: {e}")
+        _render_saved_live_log("run_analysis", "Run Analysis Live Log", show_live_analysis_log)
